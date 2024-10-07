@@ -2,14 +2,11 @@
     import { onMount } from 'svelte';
     import * as THREE from 'three';
     import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-    import { DeviceOrientationControls } from 'three-stdlib';
 
     let container;
     let activeSphere;
     let activePanoramaIndex = 0;
     let textures = [];  // Array to hold preloaded textures
-    let deviceControls = null; // Controls for device orientation
-    let orbitControls = null;  // Orbit controls
 
     let panoramaTextures = [
         '/Ground Floor/MainGate.jpg', //0
@@ -72,133 +69,121 @@
         });
     };
 
-    function enableDeviceControl() {
-        if (deviceControls) return;  // Prevent multiple initializations
+    onMount(async () => {
+    await preloadTextures(); // Preload all textures
 
-        // Disable orbit controls
-        orbitControls.enabled = false;
+    // Set up the scene
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    
+    // Set the starting position of the camera (near the center)
+    camera.position.set(0, 0, 0.1);
+    
+    // Optionally adjust the initial view direction (rotation in radians)
+    camera.rotation.y = Math.PI / 2; // Rotate 90 degrees on the Y-axis (horizontal direction)
+    camera.rotation.x = 0; // Set vertical angle (up or down)
 
-        // Enable device orientation controls
-        deviceControls = new DeviceOrientationControls(camera);
+    const renderer = new THREE.WebGLRenderer({ alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(renderer.domElement);
+
+    // Use the preloaded texture for the initial panorama
+    createSphere(scene, textures[0]);
+
+    // Set up Orbit Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.25;
+    controls.rotateSpeed = -0.5;
+
+    // You can adjust the initial target of the camera
+    controls.target.set(4, 0.5, 0);  // Pointing the camera towards a specific direction
+
+    // Create initial hotspots (for the first panorama)
+    createHotspots(scene);
+
+    // Animation loop
+    const animate = function () {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    };
+
+    animate();
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Handle hotspot clicks (in real 3D coordinates)
+    document.addEventListener('mousedown', onDocumentMouseDown, false);
+    let raycaster = new THREE.Raycaster();
+    let mouse = new THREE.Vector2();
+
+    function onDocumentMouseDown(event) {
+        event.preventDefault();
+
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+        let intersects = raycaster.intersectObjects(scene.children);
+
+        if (intersects.length > 0) {
+            let hotspot = intersects.find(intersect => intersect.object.isHotspot);
+            if (hotspot) {
+                transitionToPanorama(hotspot.object.targetPanoramaIndex);
+            }
+        }
     }
 
-    onMount(async () => {
-        await preloadTextures(); // Preload all textures
+    // Transition to preloaded panorama
+    function transitionToPanorama(panoramaIndex) {
+        activeSphere.material.opacity = 0;  // Fade out old panorama
+        setTimeout(() => {
+            activeSphere.material.map = textures[panoramaIndex];  // Use preloaded texture
+            activeSphere.material.opacity = 1;  // Fade in new panorama
+            activePanoramaIndex = panoramaIndex;
+            updateHotspots(scene);  // Update hotspots
+        }, 500);  // Smooth transition
+    }
 
-        // Set up the scene
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        
-        // Set the starting position of the camera (near the center)
-        camera.position.set(0, 0, 0.1);
-        
-        // Optionally adjust the initial view direction (rotation in radians)
-        camera.rotation.y = Math.PI / 2; // Rotate 90 degrees on the Y-axis (horizontal direction)
-        camera.rotation.x = 0; // Set vertical angle (up or down)
-
-        const renderer = new THREE.WebGLRenderer({ alpha: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        container.appendChild(renderer.domElement);
-
-        // Use the preloaded texture for the initial panorama
-        createSphere(scene, textures[0]);
-
-        // Set up Orbit Controls (default)
-        orbitControls = new OrbitControls(camera, renderer.domElement);
-        orbitControls.enableDamping = true;
-        orbitControls.dampingFactor = 0.25;
-        orbitControls.rotateSpeed = -0.5;
-
-        // Create initial hotspots (for the first panorama)
-        createHotspots(scene);
-
-        // Animation loop
-        const animate = function () {
-            requestAnimationFrame(animate);
-            if (deviceControls) {
-                deviceControls.update();  // Update based on device orientation
-            } else {
-                orbitControls.update();   // Update orbit controls (default)
-            }
-            renderer.render(scene, camera);
-        };
-
-        animate();
-
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+    function createSphere(scene, texture) {
+        const geometry = new THREE.SphereGeometry(500, 60, 40);
+        const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            side: THREE.BackSide,
+            transparent: true,
+            opacity: 1
         });
 
-        // Handle hotspot clicks (in real 3D coordinates)
-        document.addEventListener('mousedown', onDocumentMouseDown, false);
-        let raycaster = new THREE.Raycaster();
-        let mouse = new THREE.Vector2();
+        activeSphere = new THREE.Mesh(geometry, material);
+        scene.add(activeSphere);
+    }
 
-        function onDocumentMouseDown(event) {
-            event.preventDefault();
+    function createHotspots(scene) {
+        let hotspots = hotspotsByPanorama[activePanoramaIndex];
+        hotspots.forEach((hotspot) => {
+            const hotspotGeometry = new THREE.SphereGeometry(5, 32, 32);
+            const hotspotMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const hotspotMesh = new THREE.Mesh(hotspotGeometry, hotspotMaterial);
+            hotspotMesh.position.set(hotspot.position.x, hotspot.position.y, hotspot.position.z);
 
-            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            hotspotMesh.isHotspot = true;
+            hotspotMesh.targetPanoramaIndex = hotspot.targetPanoramaIndex;
 
-            raycaster.setFromCamera(mouse, camera);
-            let intersects = raycaster.intersectObjects(scene.children);
+            scene.add(hotspotMesh);
+        });
+    }
 
-            if (intersects.length > 0) {
-                let hotspot = intersects.find(intersect => intersect.object.isHotspot);
-                if (hotspot) {
-                    transitionToPanorama(hotspot.object.targetPanoramaIndex);
-                }
-            }
-        }
-
-        // Transition to preloaded panorama
-        function transitionToPanorama(panoramaIndex) {
-            activeSphere.material.opacity = 0;  // Fade out old panorama
-            setTimeout(() => {
-                activeSphere.material.map = textures[panoramaIndex];  // Use preloaded texture
-                activeSphere.material.opacity = 1;  // Fade in new panorama
-                activePanoramaIndex = panoramaIndex;
-                updateHotspots(scene);  // Update hotspots
-            }, 500);  // Smooth transition
-        }
-
-        function createSphere(scene, texture) {
-            const geometry = new THREE.SphereGeometry(500, 60, 40);
-            const material = new THREE.MeshBasicMaterial({
-                map: texture,
-                side: THREE.BackSide,
-                transparent: true,
-                opacity: 1
-            });
-
-            activeSphere = new THREE.Mesh(geometry, material);
-            scene.add(activeSphere);
-        }
-
-        function createHotspots(scene) {
-            let hotspots = hotspotsByPanorama[activePanoramaIndex];
-            hotspots.forEach((hotspot) => {
-                const hotspotGeometry = new THREE.SphereGeometry(5, 32, 32);
-                const hotspotMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-                const hotspotMesh = new THREE.Mesh(hotspotGeometry, hotspotMaterial);
-                hotspotMesh.position.set(hotspot.position.x, hotspot.position.y, hotspot.position.z);
-
-                hotspotMesh.isHotspot = true;
-                hotspotMesh.targetPanoramaIndex = hotspot.targetPanoramaIndex;
-
-                scene.add(hotspotMesh);
-            });
-        }
-
-        function updateHotspots(scene) {
-            scene.children = scene.children.filter(child => !child.isHotspot);
-            createHotspots(scene);
-        }
-
-    });
+    function updateHotspots(scene) {
+        scene.children = scene.children.filter(child => !child.isHotspot);
+        createHotspots(scene);
+    }
+});
 
 </script>
 
@@ -224,20 +209,6 @@
         width: 100%;               /* Full width for canvas */
         height: 100%;              /* Full height for canvas */
     }
-
-    button {
-        position: absolute;
-        top: 10px;
-        left: 10px;
-        padding: 10px 20px;
-        background-color: #ff9800;
-        border: none;
-        color: white;
-        font-size: 16px;
-        cursor: pointer;
-        z-index: 1000;
-    }
 </style>
 
 <div id="container" bind:this={container}></div>
-<button on:click={enableDeviceControl}>Calibrate with Phone Movement</button>
